@@ -1,0 +1,545 @@
+---
+title: "Analysis of the difference in Narrative by Israeli and Palestinian Official Twitter Accounts"
+author: "Fasih Atif"
+date: "5/17/2021"
+output:
+  html_document:
+    rmdformats::robobook
+---
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+library(rtweet)
+library(tidyverse)
+library(tidytext)
+library(ggpubr)
+library(widyr)
+library(igraph)
+library(ggraph)
+library(topicmodels)
+library(writexl)
+library(scales)
+library(textdata)
+library(sentimentr)
+library(radarchart)
+library(tm)
+```
+
+# Introduction
+
+Israel and Palestine have been at loggerheads for decades turning this into one of the most longest and most controversial conflicts. Both sides lay claim to the same territorial lands and numerous wars have been fought over it. A two state solution has been proposed numerous times but nothing has materialized as of yet. Israel, backed by US Defense Aid funding is the more powerful of the two states and has well established Defense forces. Palestine has no army, navy, or airforce but does have armed jihadi groups fighting on behalf of Palestine as a resistance to Israeli power.
+
+A few days ago, Palestinian citizens started protesting against illegal annexation of land by Israeli authorities. The protests quickly escalated into violent confrontations between Israeli forces and Palestinian protesters. The following day, the compound of the Al-Aqsa Mosque, the third holiest site in Islam was stormed by Israeli police using tear gas, rubber bullets and stun grenades against stone-throwing Palestinians. Tensions and communal violence escalated. Palestine Jihadi groups Hamas started retaliating by firing rockets into Israel. Israel responded by bombing supposedly Hamas hideouts in Gaza region. This has led to world wide condemnation due to bombing in civilian areas and civilian casualties.
+
+The world has started taking sides for either states and an important player in swinging support has been the pwoer and reach of social media. Both Pro-Israel and Pro-Palestine twitter accounts have been posting news and updates portraying the other side as the attacker and instigator. Word play can be very useful in getting the support of the world wide community. So, I decided to analyze the tweets of the Pro-Israel and Pro-Palestine accounts and see how both parties are leveraging the reach factor of social media to gain support and sympathy of the world wide community.
+
+I have used official state accounts of both sides for the analysis. Since Palestine doesn't have a defense force, I used a Palestine rights movement group as a proxy since its content was similar to that of Israel Defense Force(IDF).
+
++-------------------------------------------------+-----------------------------------------------------------+
+| Pro-Israel                                      | Pro-Palestine                                             |
++=================================================+===========================================================+
+| Israel State (@Israel)                          | Palestine UN (@Palestine_UN)                              |
++-------------------------------------------------+-----------------------------------------------------------+
+| Israel Defense Force (@IDF)                     | International Solitary Movement Palestine (@ISMPalestine) |
++-------------------------------------------------+-----------------------------------------------------------+
+| Israel Ministry of Foreign Affairs (@IsraelMFA) | Palestine Ministry of Foreign Affairs (@pmfa)             |
++-------------------------------------------------+-----------------------------------------------------------+
+
+: Israeli and Palestinian Twitter Accounts
+
+# Data Collection and Cleaning
+
+I used Twitter API to retrieve the tweets from each account. Twitter API standard access allows upto 3200 tweets to be retrieved for each account. This resulted in 10215 tweets being retrieved for Pro-Israel accounts while 10405 tweets were retrieved for Pro-Palestine accounts. All tweets are in English language and contain retweets which amounted to approximately 27% of the total tweets for each side.
+
+There was significant cleaning done on the tweets. I removed emojis, URL links, mentions, hashtags, and whitespaces etc. A quick analysis of the tweets showed that there were several kinds of abbreviations being used for a single word. For example, the abbreviations 'amb', 'Amb', 'Amb.' were all converted to the full form 'Ambassador'. Any tweets with less than 4 words were removed.
+
+To work with this as a tidy dataset, I had to restructure it as **one-token-per-row** format. The `unnest_tokens` function from tidytext package is a way to convert a dataframe with a text column to be one-token-per-row:
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+# whatever name you assigned to your created app
+appname <- "fasihatif"
+
+## api key (example below is not a real key)
+key <- "INSERT KEY"
+
+## api secret
+secret <- "INSERT SECRET KEY"
+
+twitter_token <- create_token(
+  app = appname,
+  consumer_key = key,
+  consumer_secret = secret,
+  access_token = "INSERT ACCESS TOKEN",
+  access_secret = "INSERT ACCESS SECRET")
+```
+
+```{r twitter_api, eval=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+## PRO-ISRAEL Tweets
+pro_israel <- get_timelines(
+  c("IDF", "Israel", "IsraelMFA"),
+  n = 3200,
+  lang = "en",
+  include_rts = TRUE
+)
+
+write_csv(pro_israel, 'pro_israel.csv')
+
+## PRO-PALESTINE Tweets
+
+pro_palestine <- get_timelines(
+  c("ISMPalestine", "Palestine_UN", "pmofa"),
+  n = 3200,
+  lang = "en",
+  include_rts = TRUE
+)
+
+write_csv(pro_palestine, 'pro_palestine.csv')
+
+```
+
+```{r data cleaning, echo = FALSE, message = FALSE, warning = FALSE}
+
+## Updating Israel state account name
+pro_israel$name <- gsub('ישראל', 'State', pro_israel$name)
+
+## Remove Emoticons
+pro_israel$text <- sapply(pro_israel$text,function(row) iconv(row, "latin1", "ASCII", sub=""))
+pro_palestine$text <- sapply(pro_palestine$text,function(row) iconv(row, "latin1", "ASCII", sub=""))
+
+## Remove Mentions
+pro_israel$text <- gsub('@\\S+', '', pro_israel$text)
+pro_palestine$text <- gsub('@\\S+', '', pro_palestine$text)
+
+## Remove Hashtags
+pro_israel$text <- str_replace_all(pro_israel$text,"#[a-z,A-Z]*","")
+pro_palestine$text <- str_replace_all(pro_palestine$text,"#[a-z,A-Z]*","")
+
+## Remove Punctuation
+pro_israel$text <- removePunctuation(pro_israel$text,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+pro_palestine$text <- removePunctuation(pro_palestine$text,
+                  preserve_intra_word_contractions = TRUE,
+                  preserve_intra_word_dashes = TRUE,
+                  ucp = FALSE)
+
+pro_israel$text <- removeNumbers(pro_israel$text)
+pro_palestine$text <- removeNumbers(pro_palestine$text)
+
+## Remove URLs
+pro_israel$text <- gsub('http\\S+\\s*', '', pro_israel$text)
+pro_palestine$text <- gsub('http\\S+\\s*', '', pro_palestine$text)
+
+## Remove Controls and special characters
+pro_israel$text <- gsub('[[:cntrl:]]', '', pro_israel$text)
+pro_palestine$text <- gsub('[[:cntrl:]]', '', pro_palestine$text)
+
+## Remove RT
+pro_israel$text <- gsub('\\b+RT', '', pro_israel$text)
+pro_palestine$text <- gsub('\\b+RT', '', pro_palestine$text)
+
+## Remove trailing whitespaces
+pro_israel$text <- gsub("[[:space:]]*$","", pro_israel$text)
+pro_palestine$text <- gsub("[[:space:]]*$","", pro_palestine$text)
+
+## Remove extra whitespaces
+pro_israel$text <- gsub(' +',' ', pro_israel$text)
+pro_palestine$text <- gsub(' +',' ', pro_palestine$text)
+
+## Change & to and
+pro_israel$text <- gsub("&", "and", pro_israel$text, fixed = TRUE)
+pro_israel$text <- gsub("andamp", "and", pro_israel$text, fixed = TRUE)
+pro_palestine$text <- gsub("&", "and", pro_palestine$text, fixed = TRUE)
+pro_palestine$text <- gsub("andamp", "and", pro_palestine$text, fixed = TRUE)
+
+## Change amb to ambassador
+pro_palestine$text <- gsub("^Amb$", "Ambassador", pro_palestine$text)
+pro_palestine$text <- gsub("Amb.", "Ambassador", pro_palestine$text, fixed = TRUE)
+pro_palestine$text <- gsub("^amb$", "Ambassador", pro_palestine$text)
+
+## Replace some words to avoid being counted as seperate words
+pro_israel$text <- gsub("tel aviv", "tel_aviv", pro_israel$text, ignore.case = TRUE)
+pro_palestine$text <- gsub("tel aviv", "tel_aviv", pro_palestine$text, ignore.case = TRUE)
+pro_palestine$text <- gsub("al-aqsa", "al_aqsa", pro_palestine$text, ignore.case = TRUE)
+pro_palestine$text <- gsub("al-", "al_", pro_palestine$text, ignore.case = TRUE)
+pro_israel$text <- gsub("al-", "al_", pro_israel$text, ignore.case = TRUE)
+
+## Keep tweets with greater than 5 words
+pro_israel <- pro_israel[sapply(strsplit(as.character(pro_israel$text)," "),length)>6,]
+pro_palestine <- pro_palestine[sapply(strsplit(as.character(pro_palestine$text)," "),length)>6,]
+
+## Remove numbers in beginning of tweets
+number_list <- "(1/|2/|3/|4/|5/|6/|7/|8/9/|10/)"
+pro_israel$text <- gsub(number_list, "", pro_israel$text)
+pro_palestine$text <- gsub(number_list, "", pro_palestine$text)
+
+## Remove leading whitespaces
+pro_israel$text <- gsub("^[[:space:]]*","", pro_israel$text)
+pro_palestine$text <- gsub("^[[:space:]]*","", pro_palestine$text)
+
+## Drop columns
+israel_tweets <- pro_israel %>% select("created_at", "status_id", "screen_name", "text", "name",  )
+palestine_tweets <- pro_palestine%>% select("created_at", "status_id", "screen_name", "text", "name")
+
+## Remove rows with NA values
+israel_tweets <- israel_tweets[complete.cases(israel_tweets), ]
+palestine_tweets <- palestine_tweets[complete.cases(palestine_tweets), ]
+```
+
+```{r tokenization, echo = FALSE, message = FALSE, warning = FALSE}
+## Unnest tokens
+israel_tweets_token <- israel_tweets %>%
+  group_by(screen_name) %>%
+  mutate(tweet_number = row_number()) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+  
+palestine_tweets_token <- palestine_tweets %>%
+  group_by(screen_name) %>%
+  mutate(tweet_number = row_number()) %>%
+  ungroup() %>%
+  unnest_tokens(word, text)
+
+## Removing stop words
+
+israel_tweets_token <- israel_tweets_token %>%
+  anti_join(stop_words)
+  
+palestine_tweets_token <- palestine_tweets_token %>%
+  anti_join(stop_words)
+
+palestine_tweets_token$word <- gsub("^amb$", "ambassador", palestine_tweets_token$word)
+```
+
+# Analysis
+
+## Most Common Words
+
+I wanted to observe the most common words used by both sides to shape their respective narrative after excluding for stop words. For this particular task, I added 'Israel' and 'Israeli' as additional stop words for Israeli accounts, and 'Palestine' and 'Palestinian' as additional stop words for Palestinian accounts. These are state accounts who refer to themselves by their names. Hence, I removed them to see what other words are commonly used. The results were interesting and defines each sides narrative. Top words for Pro-Israel accounts were 'people', 'gaza', 'rockets', 'fired', Hamas', 'idf' etc. Israel constantly updates regarding the rockets attacks by Hamas and the Israeli Defense Forces (IDF) retaliation on Hamas hideouts on its twitter accounts. Top words for Pro-Palestine accounts consisted of 'Israeli', 'forces', 'occupation', 'west bank' etc. Pro Palestine accounts try to show the land occupation actions undertaken by Israeli Forces in West Bank and Gaza as a violation of the laws. This goes to show how both sides are portraying themselves as victims and the other the bad guy.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+common_Words_isl <- israel_tweets_token %>%
+  count(word, sort = TRUE) %>%
+  filter(!word %in% c("israel", "israeli")) %>%
+  top_n(10) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col(fill = "steelblue") + coord_flip() + theme_classic() +
+  labs(title = "Pro-Israel",  x = NULL, y = NULL)
+
+
+common_Words_pls <- palestine_tweets_token %>%
+  count(word, sort = TRUE) %>%
+  filter(!word %in% c("palestine", "palestinian", "palestinians")) %>%
+  top_n(10) %>%
+  mutate(word = reorder(word, n)) %>%
+  ggplot(aes(word, n)) + geom_col(fill = "darkgreen") + coord_flip() + theme_classic() +
+  labs(title = "Pro-Palestine", x = NULL, y = NULL)
+
+
+fig <- ggarrange(common_Words_isl, common_Words_pls, nrow = 1, ncol = 2)
+
+annotate_figure(fig,
+               bottom = text_grob("No of occurrances", color = "black", size = 13), left = text_grob("Most common words", color = "black", rot = 90),
+)
+
+```
+
+## Comparing Word Frequencies
+
+Words that are close to the line in these plots have similar frequencies in both sets of tweets. For example, in both Pro-Israel and Pro-Palestine accounts words such as "israeli", "gaza", "jerusalem" are found at the high frequency end. Words that are far from the line are words that are found more in one set of tweets than another. For example, words such as 'palestinians', 'occupation, 'settlement', 'activists' are found more on Pro-Palestine accounts. Words such as 'hamas', 'rockets', 'iranian', 'rockets' are mentioned more in Pro-Israeli accounts. The high count of 'Palestine' in Pro-Palestine accounts serves to show the emphasis on having Palestine be recognized as a separate state while Pro-Israeli accounts rarely ever make any mention of the word 'Palestine'. Instead Pro-Israel accounts refer to Palestinian regions as Gaza or West Bank, and by entities such as Hamas. This goes to show that Israel refuses to recognize the state of Palestine officially.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+israel_tweets_token <- israel_tweets_token %>% mutate(group = replicate(length(israel_tweets_token$word), "israel_account"))
+palestine_tweets_token <- palestine_tweets_token %>% mutate(group = replicate(length(palestine_tweets_token$word), "palestine_account"))
+
+combined_groups <- rbind(israel_tweets_token, palestine_tweets_token)
+
+combined_groups$word <- gsub('[[:digit:]]+', '', combined_groups$word)
+combined_groups <- combined_groups %>% drop_na()
+
+frequency <- combined_groups  %>% 
+  group_by(group) %>% 
+  count(word, sort = TRUE) %>% 
+  left_join(combined_groups %>% 
+              group_by(group) %>% 
+              summarise(total = n())) %>%
+  mutate(freq = n/total)
+
+frequency <- frequency %>% 
+  select(group, word, freq) %>% 
+  pivot_wider(names_from = group, values_from = freq) %>%
+  arrange(israel_account, palestine_account)
+
+ggplot(frequency, aes(israel_account, palestine_account)) +
+  geom_jitter(alpha = 0.1, size = 2.5, width = 0.25, height = 0.25) +
+  geom_text(aes(label = word), check_overlap = TRUE, vjust = 1.5) +
+  scale_x_log10(labels = percent_format()) +
+  scale_y_log10(labels = percent_format()) +
+  geom_abline(color = "red") +
+  labs(title = "Comparing Word Frequencies",
+       x = "Israel Twitter Accounts", y = "Palestine Twitter Accounts") +
+  theme_classic()
+```
+
+## TF-IDF Frequency
+
+The tidytext package uses an implementation of tf-idf consistent with tidy data principles that enables us to see how different words are important in documents within a collection or corpus of documents (tidytextmining). I merged both sets of tweets and drew bar charts showing words that are common to each account but not in the whole set of tweets.
+
+Till now our focus was on individual words. Now we will apply tf-idf on bigrams (two-word sequence of words) to identify the most common pairing of words on each account but not common in the combined overall set of tweets (Pro-Israel & Pro-Palestine accounts). This will allows us to look at contexts and narratives in greater detail.
+
+```{r bigram td-idf, echo = FALSE, message = FALSE, warning = FALSE, fig.height= 9}
+
+combined_tweets <- rbind(israel_tweets, palestine_tweets)
+
+combined_tweets$text <- gsub('[[:digit:]]+', '', combined_tweets$text)
+
+combined_tweets$text <- gsub("^amb$", "ambassador", combined_tweets$text)
+combined_tweets$text <- gsub("__", "ambassador", combined_tweets$text)
+
+combined_bigrams <- combined_tweets %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+bigrams_separated <- combined_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+bigrams_filtered <- bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+bigrams_filtered <- bigrams_filtered[complete.cases(bigrams_filtered), ]
+
+bigrams_united <- bigrams_filtered %>%
+  unite(bigram, word1, word2, sep = " ")
+
+count_bigrams <- bigrams_united  %>%
+  count(name, bigram, sort = TRUE)
+
+bigram_tf_idf <- count_bigrams %>%
+  bind_tf_idf(bigram, name, n)
+
+bigram_tf_idf$name = factor(bigram_tf_idf$name, levels = c("Israel State", "State of Palestine", "Israel Defense Forces", "ISM Palestine", "Israel Foreign Ministry", "State of Palestine - MFA"))
+
+bigram_tf_idf$name[is.na(bigram_tf_idf$name)] <- "Israel State"
+
+bigram_tf_idf %>%
+  group_by(name) %>%
+  slice_max(tf_idf, n = 15) %>%
+  ungroup() %>%
+  ggplot(aes(tf_idf, fct_reorder(bigram, tf_idf), fill = name)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~name, ncol = 2, scales = "free") +
+  labs(x = "tf-idf", y = NULL) + theme_classic()
+
+```
+
+Immediately we can see sigificant differences in the official state accounts of Israel and Palestine. The common pair of consecutive words in 'Israel ישראל ' are mostly about national celebration days while the 'State of Palestine' account mentions a lot of government figures such as ministers and ambassadors. Like the individual words comparison, the consecutive word pairings on the defense accounts provide contrasting narratives amongst themselves. 'Israel Defense Force' puts emphasis on jihadi groups such as Hamas, missile attacks, siren sounding, and aerial defense systems. The 'ISM Palestine' account focuses on the recurring occupation actions by Israelis and the the crackdown by Israeli police with rubber bullets and tear gas. The diplomatic accounts both have diplomat names as the most common consecutive word pairings.
+
+## Sentiment Analysis
+
+In the previous section, I explored the frquency of common words used between accounts. Now I will look at analyzing the overall sentiment of the tweets by each account. I will use two approaches to analyze the sentiment: the sentiment content of the whole text as the sum of the sentiment content of the individual words and sentiment of the text as a combination of its individual words.
+
+**Afinn Lexicon**
+
+For the first approach, I used 'Afinn' lexicon which measures sentiment with a numeric score between -5 and 5. I summed the sentiment score of the individual words to get the overall sentiment score of the whole tweet. I then used a density plot to visualize the sentiment mix.
+
+```{r afinn, echo = FALSE, message = FALSE, warning = FALSE}
+      
+# get sentiments from 'afinn' because we want a numeric score so we can compare sentiments between justices, cases
+
+combined_groups$name = factor(combined_groups$name, levels = c("Israel State", "Israel Defense Forces", "Israel Foreign Ministry", "State of Palestine", "ISM Palestine", "State of Palestine - MFA"))
+
+combined_groups$name[is.na(combined_groups$name)] <- "Israel State"
+
+sentiments_afinn <- 
+  combined_groups %>% 
+  inner_join(get_sentiments('afinn')) %>%
+  group_by(tweet_number, screen_name, name) %>%
+  summarize(sum_sentiment = sum(value))
+      
+sentiments_afinn %>%
+  ggplot(aes(x = sum_sentiment, fill= screen_name)) +
+  geom_density() +
+  geom_vline(xintercept = 0, linetype = "dotted", ) + 
+  facet_wrap(~name) +
+  theme_bw() + 
+  theme(legend.position = "none") +
+  labs(x =  "Sentiment Score", y = "Density", title = "Sentiment score by tweet - Afinn")
+
+```
+
+The results were quite interesting. State of Israel account majorly positive tweets as seen by the huge peak to the right of the 0 'vertical dotted' line which is neutral sentiment. In comparison, the state of Palestine account has a high peak on either side of the neutral line. The high peak on the positive side maybe wrong as we took a sum of the individual sentiments of the words in each tweet. The sentiment calculation didnt take into account the negation of words. From a superficial quick, majority of the tweets express harm or threats to the Palestinian people.
+
+As expected, both ISM Palestine and Israel Defense Force accounts have a negative sentiment theme as both sides report on attacks, casualties, and bombings. The Israeli Foreign affairs account (Israeli MFA) is largely positively sentimental while the Palestinian foreign affairs (Palestinian MFA) account is largely negatively sentimental. Israeli MFA tweets consist of showcasing good diplomatic relations with other countries, trade agreements, official visits etc which might explain the positive sentiments. Palestinian MFA focuses on highlighting the Israeli aggression on Palestinian people and land to the world hence explains the overall negative sentiments.
+
+**Sentimentr**
+
+Next we analyzed the sentiments using sentimentr package. This package attempts to take into account valence shifters (i.e., negators, amplifiers (intensifiers), de-amplifiers (downtoners), and adversative conjunctions).
+
+```{r sentimentr, echo = FALSE, message = FALSE, warning = FALSE}
+
+sentimentr_df <- combined_tweets
+
+sentimentr <- sentiment_by(sentimentr_df$text)
+
+sentimentr_df$ave_sentiment <- sentimentr$ave_sentiment
+
+sentimentr_df$name = factor(sentimentr_df$name, levels = c("Israel State", "Israel Defense Forces", "Israel Foreign Ministry", "State of Palestine", "ISM Palestine", "State of Palestine - MFA"))
+
+sentimentr_df$name[is.na(sentimentr_df$name)] <- "Israel State"
+
+sentimentr_df %>%
+  ggplot(aes(x = ave_sentiment, fill= screen_name)) +
+  geom_density() +
+  geom_vline(xintercept = 0, linetype = "dotted", ) + 
+  facet_wrap(~ name) +
+  theme_bw() + 
+  theme(legend.position = "none") +
+  labs(x =  "Sentiment Score", y = "Density", title = "Sentiment score by tweet - Sentimentr")
+
+```
+
+The State of Israel account is shown as more positive with sentimentr package as compared to Afinn lexicon. The defense accounts for both sides are just to the left of the neutral line with broader peaks but overall similiar to that of Afinn lexicon. The Israel MFA account is shown having a broader positive sentiment base while the Palestine MFA account is shown as havig neutral sentiment compared to the negative sentiment with Afinn lexicon.
+
+**NRC Lexicon Visualization**
+
+The nrc lexicon categorizes words in a binary fashion ("yes"/"no") into categories of positive, negative, anger, anticipation, disgust, fear, joy, sadness, surprise, and trust. It would be interesting too see how the tweets of both sides measure on the different categories with nrc lexicon. I used a radar chart to compare the results:
+
+```{r israel radar chart, echo=FALSE, message=FALSE, warning=FALSE}
+
+israel_nrc <- combined_groups %>%
+  anti_join(stop_words) %>%
+  inner_join(get_sentiments("nrc")) %>%
+  filter(!sentiment %in% c("positive", "negative"))
+
+#Get the count of words per sentiment per year
+account_sentiment_nrc <- israel_nrc %>%
+  group_by(group, sentiment) %>%
+  count(group, sentiment) %>%
+  select(group, sentiment, group_sentiment_count = n)
+
+#Get the total count of sentiment words per year (not distinct)
+total_sentiment_account <- israel_nrc %>%
+  count(group) %>%
+  select(group, group_total = n)
+
+#Join the two and create a percent field
+account_sentiment_nrc %>%
+  inner_join(total_sentiment_account, by = "group") %>%
+  mutate(percent = group_sentiment_count / group_total * 100 ) %>%
+  select(-group_sentiment_count, -group_total) %>%
+  spread(group, percent) %>%
+  chartJSRadar(showToolTipLabel = TRUE,
+               main = "Pro-Israel vs Pro-Palestine Twitter Emotions")
+```
+
+When it comes to trust, fear, sadness, and disgust, both sides perform nearly the same. Israeli acounts have words that show more joy and anticipation. Palestinian accounts have words that show more anger and sadness.
+
+## Visualizing a network of bigrams
+
+We can arrange the words into a network, or "graph" as a way of showing a lot interconnected relationships.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+israel_bigrams <- israel_tweets %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+israel_bigrams_separated <- israel_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+israel_bigrams_filtered <- israel_bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+israel_bigram_counts <- israel_bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+israel_bigram_graph <- israel_bigram_counts %>%
+  filter(n > 25) %>%
+  graph_from_data_frame()
+
+```
+
+For Pro Israeli accounts, the network structure shows us common centers of nodes words such as 'israeli', 'terror', 'regional', 'idf' "and"colonel". We also see pairs or triplets along the outside that form common short phrases ('bomb shelters', 'violent riots', and 'islamic jihad'. The big networks below show us the main topics discussed on the Pro Isareli accounts.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.height= 8, fig.width= 9}
+a <- grid::arrow(type = "closed", length = unit(.07, "inches"))
+
+set.seed(2020)
+
+ggraph(israel_bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.02, 'inches')) +
+  geom_node_point(color = "lightblue", size = 2) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+
+```
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE}
+## Palestine network graph
+
+palestine_bigrams <- palestine_tweets %>%
+  unnest_tokens(bigram, text, token = "ngrams", n = 2)
+
+palestine_bigrams_separated <- palestine_bigrams %>%
+  separate(bigram, c("word1", "word2"), sep = " ")
+
+palestine_bigrams_filtered <- palestine_bigrams_separated %>%
+  filter(!word1 %in% stop_words$word) %>%
+  filter(!word2 %in% stop_words$word)
+
+palestine_bigram_counts <- palestine_bigrams_filtered %>% 
+  count(word1, word2, sort = TRUE)
+
+palestine_bigram_counts <- palestine_bigram_counts %>% drop_na()
+
+palestine_bigram_graph <- palestine_bigram_counts %>%
+  filter(n > 20) %>%
+  graph_from_data_frame()
+
+```
+
+For Pro Palestinian accounts, we also see some common center of nodes such as 'israeli', 'palestinian', 'international', 'ambassador' with short phrases ('dead shot', 'security council', 'tear gas') on the outside. Most common topics are centered around Israeli aggression, foriegn diplomacy, and peace process talks.
+
+```{r, echo = FALSE, message = FALSE, warning = FALSE, fig.height= 8, fig.width= 9}
+a <- grid::arrow(type = "closed", length = unit(.07, "inches"))
+
+set.seed(2020)
+
+ggraph(palestine_bigram_graph, layout = "fr") +
+  geom_edge_link(aes(edge_alpha = n), show.legend = FALSE,
+                 arrow = a, end_cap = circle(.02, 'inches')) +
+  geom_node_point(color = "lightblue", size = 2) +
+  geom_node_text(aes(label = name), vjust = 1, hjust = 1)
+```
+
+# Conclusion
+
+I tried to analyze the narratives provided by Israeli official accounts and Palestinian official accounts.
+
+**Pro-Israel accounts:**
+
+-   Emphasis on the attacks by Jihadi groups like Hamas and calling on other nations to condemn such acts
+
+-   Defense systems like Iron dome and air raid sirens
+
+-   Diplomatic and trade meetings with other allies
+
+-   Celebration of national and international holidays
+
+**Pro-Palestine accounts:**
+
+-   Emphasis on Israeli aggression and occupation of Palestinian land
+
+-   Diplomatic meetings with other countries to win support
+
+-   Movements aimed at achieving peace and solidarity
+
+-   Emphasis on the casualties and damage to infrastructure due to Israeli bombings and shootings
+
+# References
+
+1.  Silge, J. and Robinson, D., n.d. *Text mining with R*. O'RIELLY
+
+2.  Beauchamp, Z., 2021. *Everything you need to know about Israel-Palestine*. [online] Vox. Available at: <https://www.vox.com/2018/11/20/18079996/israel-palestine-conflict-guide-explainer> [Accessed 19 May 2021].
+
+
